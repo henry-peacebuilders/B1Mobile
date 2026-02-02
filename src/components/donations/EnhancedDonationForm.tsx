@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { View, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from "react-native";
 import { Card, Text, TextInput, Button, Switch, Menu, SegmentedButtons } from "react-native-paper";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useQuery } from "@tanstack/react-query";
 import { CardField, CardFieldInput, createPaymentMethod, collectBankAccountForSetup, confirmSetupIntent } from "@stripe/stripe-react-native";
+import { SecureFields, IPayEngineConfig } from "payengine-react-native";
 import { ApiHelper, CurrencyHelper } from "../../helpers";
 import { DonationHelper } from "../../helpers/DonationHelper";
 import { FundInterface, StripeDonationInterface, StripePaymentMethod, PaymentGateway } from "../../interfaces";
@@ -66,6 +67,11 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
   // Determine church ID for funds query
   const churchId = currentUserChurch?.church?.id || "";
 
+  // PayEngine SecureFields support
+  const secureFieldRef = useRef<any>(null);
+  const [payEngineReady, setPayEngineReady] = useState(false);
+  const isKingdomFunding = gatewayData && gatewayData.length > 0 && gatewayData[0]?.provider === "KingdomFunding";
+
   // Use react-query for funds
   const { data: funds = [] } = useQuery<FundInterface[]>({
     queryKey: [`/funds/churchId/${churchId}`, "GivingApi"],
@@ -85,6 +91,14 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
       });
     }
   }, [churchId, churchData]);
+
+  // Initialize PayEngine when using KingdomFunding
+  useEffect(() => {
+    if (isKingdomFunding && gatewayData[0]?.publicKey) {
+      console.log("PayEngine gateway detected - SecureFields will be used");
+      setPayEngineReady(true);
+    }
+  }, [isKingdomFunding, gatewayData]);
 
   // Initialize defaults
   useEffect(() => {
@@ -291,19 +305,40 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
     };
     const personResult = await ApiHelper.post("/people/loadOrCreate", personData, "MembershipApi");
 
-    // Create payment method
-    const stripePaymentMethod = await createPaymentMethod({
-      paymentMethodType: "Card",
-      ...cardDetails
-    });
+    let paymentMethodId: string;
 
-    if (stripePaymentMethod.error) {
-      throw new Error(stripePaymentMethod.error.message);
+    // Check if using PayEngine (KingdomFunding) or Stripe
+    if (isKingdomFunding) {
+      // Use PayEngine SecureFields to create card token
+      if (!secureFieldRef.current) {
+        throw new Error("PayEngine SecureFields not initialized");
+      }
+
+      const gateway = gatewayData && gatewayData.length > 0 ? gatewayData[0] : null;
+      const payEngineResult = await secureFieldRef.current.createCard();
+
+      if (!payEngineResult || !payEngineResult.token) {
+        throw new Error("Failed to tokenize card with PayEngine");
+      }
+
+      paymentMethodId = payEngineResult.token;
+    } else {
+      // Use Stripe to create payment method
+      const stripePaymentMethod = await createPaymentMethod({
+        paymentMethodType: "Card",
+        ...cardDetails
+      });
+
+      if (stripePaymentMethod.error) {
+        throw new Error(stripePaymentMethod.error.message);
+      }
+
+      paymentMethodId = stripePaymentMethod.paymentMethod.id;
     }
 
     // Call addcard to get customerId (like AppHelper does)
     const pm = {
-      id: stripePaymentMethod.paymentMethod.id,
+      id: paymentMethodId,
       personId: personResult.id,
       email: email,
       name: `${firstName} ${lastName}`,
@@ -557,72 +592,72 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
 
       {/* Recurring Toggle - Hidden for guest bank payments (one-time only) */}
       {!((!currentUserChurch?.person?.id) && guestPaymentType === "bank") && (
-      <Card style={styles.sectionCard}>
-        <Card.Content>
-          <View style={styles.switchRow}>
-            <View style={styles.switchContent}>
-              <Text variant="titleMedium" style={styles.switchTitle}>
-                {t("donations.recurring")}
-              </Text>
-              <Text variant="bodyMedium" style={styles.switchSubtitle}>
-                {t("donations.donate")}
-              </Text>
+        <Card style={styles.sectionCard}>
+          <Card.Content>
+            <View style={styles.switchRow}>
+              <View style={styles.switchContent}>
+                <Text variant="titleMedium" style={styles.switchTitle}>
+                  {t("donations.recurring")}
+                </Text>
+                <Text variant="bodyMedium" style={styles.switchSubtitle}>
+                  {t("donations.donate")}
+                </Text>
+              </View>
+              <Switch value={isRecurring} onValueChange={setIsRecurring} thumbColor={isRecurring ? "#0D47A1" : "#f4f3f4"} trackColor={{ false: "#767577", true: "#0D47A1" }} />
             </View>
-            <Switch value={isRecurring} onValueChange={setIsRecurring} thumbColor={isRecurring ? "#0D47A1" : "#f4f3f4"} trackColor={{ false: "#767577", true: "#0D47A1" }} />
-          </View>
 
-          {isRecurring && (
-            <View style={styles.intervalSection}>
-              <View style={{ width: DimensionHelper.wp(35) }}>
-                <Text variant="titleSmall" style={styles.intervalLabel}>
-                  {t("donations.selectInterval")}
-                </Text>
-                <Menu
-                  visible={showIntervalMenu}
-                  onDismiss={() => setShowIntervalMenu(false)}
-                  anchor={
-                    <TouchableOpacity style={styles.selector} onPress={() => setShowIntervalMenu(true)}>
-                      <Text variant="bodyLarge" style={styles.selectorText}>
-                        {getIntervalLabel(selectedInterval)}
-                      </Text>
-                      <MaterialIcons name="expand-more" size={24} color="#9E9E9E" />
-                    </TouchableOpacity>
-                  }>
-                  {intervalTypes.map(interval => (
-                    <Menu.Item
-                      key={interval.value}
-                      onPress={() => {
-                        setSelectedInterval(interval.value);
-                        setShowIntervalMenu(false);
-                      }}
-                      title={interval.label}
-                    />
-                  ))}
-                </Menu>
+            {isRecurring && (
+              <View style={styles.intervalSection}>
+                <View style={{ width: DimensionHelper.wp(35) }}>
+                  <Text variant="titleSmall" style={styles.intervalLabel}>
+                    {t("donations.selectInterval")}
+                  </Text>
+                  <Menu
+                    visible={showIntervalMenu}
+                    onDismiss={() => setShowIntervalMenu(false)}
+                    anchor={
+                      <TouchableOpacity style={styles.selector} onPress={() => setShowIntervalMenu(true)}>
+                        <Text variant="bodyLarge" style={styles.selectorText}>
+                          {getIntervalLabel(selectedInterval)}
+                        </Text>
+                        <MaterialIcons name="expand-more" size={24} color="#9E9E9E" />
+                      </TouchableOpacity>
+                    }>
+                    {intervalTypes.map(interval => (
+                      <Menu.Item
+                        key={interval.value}
+                        onPress={() => {
+                          setSelectedInterval(interval.value);
+                          setShowIntervalMenu(false);
+                        }}
+                        title={interval.label}
+                      />
+                    ))}
+                  </Menu>
+                </View>
+                <View style={{ width: DimensionHelper.wp(35) }}>
+                  <Text variant="titleSmall" style={styles.intervalLabel}>
+                    Start Date
+                  </Text>
+                  <Button mode="outlined" onPress={() => setOpenStartPicker(true)} style={styles.dateTimeButton}>
+                    <Text style={styles.dateTimeText}>{dayjs(startDate).format("ll")}</Text>
+                  </Button>
+                  <DatePicker
+                    modal
+                    open={openStartPicker}
+                    date={startDate}
+                    mode={"date"}
+                    onConfirm={date => {
+                      setOpenStartPicker(false);
+                      setStartDate(date);
+                    }}
+                    onCancel={() => setOpenStartPicker(false)}
+                  />
+                </View>
               </View>
-              <View style={{ width: DimensionHelper.wp(35) }}>
-                <Text variant="titleSmall" style={styles.intervalLabel}>
-                  Start Date
-                </Text>
-                <Button mode="outlined" onPress={() => setOpenStartPicker(true)} style={styles.dateTimeButton}>
-                  <Text style={styles.dateTimeText}>{dayjs(startDate).format("ll")}</Text>
-                </Button>
-                <DatePicker
-                  modal
-                  open={openStartPicker}
-                  date={startDate}
-                  mode={"date"}
-                  onConfirm={date => {
-                    setOpenStartPicker(false);
-                    setStartDate(date);
-                  }}
-                  onCancel={() => setOpenStartPicker(false)}
-                />
-              </View>
-            </View>
-          )}
-        </Card.Content>
-      </Card>
+            )}
+          </Card.Content>
+        </Card>
       )}
 
       {/* Payment Method */}
@@ -671,6 +706,36 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
                   </Text>
                 </View>
               )}
+            </View>
+          ) : isKingdomFunding ? (
+            <View style={styles.payEngineContainer}>
+              <SecureFields.CollectManager
+                ref={secureFieldRef}
+                config={{ publicKey: gatewayData[0]?.publicKey || "" }}
+              >
+                <SecureFields.CardHolderNameField
+                  placeholder="Cardholder Name"
+                  style={styles.payEngineField}
+                />
+                <SecureFields.CardNumberField
+                  placeholder="Card Number"
+                  style={styles.payEngineField}
+                />
+                <View style={styles.payEngineRow}>
+                  <SecureFields.ExpDateTextField
+                    placeholder="MM/YY"
+                    style={[styles.payEngineField, styles.payEngineFieldHalf]}
+                  />
+                  <SecureFields.CVCField
+                    placeholder="CVV"
+                    style={[styles.payEngineField, styles.payEngineFieldHalf]}
+                  />
+                </View>
+                <SecureFields.ZipCodeField
+                  placeholder="Zip Code"
+                  style={styles.payEngineField}
+                />
+              </SecureFields.CollectManager>
             </View>
           ) : (
             <CardField
@@ -926,5 +991,35 @@ const styles = StyleSheet.create({
   },
   bankConnectingText: {
     color: "#0D47A1"
+  },
+
+  // PayEngine SecureFields
+  payEngineContainer: {
+    marginVertical: 8
+  },
+  payEngineNote: {
+    color: "#9E9E9E",
+    textAlign: "center",
+    marginBottom: 12,
+    fontSize: 12
+  },
+  payEngineField: {
+    width: "100%",
+    height: 50,
+    marginVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#E0E0E0"
+  },
+  payEngineRow: {
+    flexDirection: "row",
+    width: "100%",
+    gap: 12
+  },
+  payEngineFieldHalf: {
+    flex: 1,
+    marginVertical: 6
   }
 });
