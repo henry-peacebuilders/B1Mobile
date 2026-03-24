@@ -18,7 +18,7 @@ export class EnvironmentHelper {
     const extra = Constants.expoConfig?.extra || {};
     let stage = extra.STAGE;
 
-    stage = "prod";
+    //stage = "prod";
     //stage = "staging";
     console.log("[EnvironmentHelper] Initializing with stage:", stage);
     switch (stage) {
@@ -43,16 +43,16 @@ export class EnvironmentHelper {
   };
 
   static initDev = () => {
-    // Hardcode staging URLs - don't read from extra since app.config.js defaults to prod
-    EnvironmentHelper.MembershipApi = "https://api.staging.churchapps.org/membership";
-    EnvironmentHelper.MessagingApi = "https://api.staging.churchapps.org/messaging";
-    EnvironmentHelper.AttendanceApi = "https://api.staging.churchapps.org/attendance";
-    EnvironmentHelper.GivingApi = "https://api.staging.churchapps.org/giving";
-    EnvironmentHelper.LessonsApi = "https://api.staging.lessons.church";
-    EnvironmentHelper.DoingApi = "https://api.staging.churchapps.org/doing";
-    EnvironmentHelper.ContentApi = "https://api.staging.churchapps.org/content";
-    EnvironmentHelper.ContentRoot = "https://content.staging.churchapps.org";
-    EnvironmentHelper.LessonsRoot = "https://staging.lessons.church";
+    const extra = Constants.expoConfig?.extra || {};
+    EnvironmentHelper.MembershipApi = extra.MEMBERSHIP_API || "https://api.staging.churchapps.org/membership";
+    EnvironmentHelper.MessagingApi = extra.MESSAGING_API || "https://api.staging.churchapps.org/messaging";
+    EnvironmentHelper.AttendanceApi = extra.ATTENDANCE_API || "https://api.staging.churchapps.org/attendance";
+    EnvironmentHelper.GivingApi = extra.GIVING_API || "https://api.staging.churchapps.org/giving";
+    EnvironmentHelper.LessonsApi = extra.LESSONS_API || "https://api.staging.lessons.church";
+    EnvironmentHelper.DoingApi = extra.DOING_API || "https://api.staging.churchapps.org/doing";
+    EnvironmentHelper.ContentApi = extra.CONTENT_API || "https://api.staging.churchapps.org/content";
+    EnvironmentHelper.ContentRoot = extra.CONTENT_ROOT || "https://content.staging.churchapps.org";
+    EnvironmentHelper.LessonsRoot = extra.LESSONS_ROOT || "https://staging.lessons.church";
     EnvironmentHelper.B1WebRoot = "https://{subdomain}.staging.b1.church";
   };
 

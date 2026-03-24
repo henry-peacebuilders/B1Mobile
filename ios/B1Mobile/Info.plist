@@ -71,6 +71,8 @@
 	<string>B1 Church needs access to your photos to allow you to upload profile pictures and share images with your church community.</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>B1 Church sends notifications to keep you updated about church events, messages, and important announcements.</string>
+	<key>RCTNewArchEnabled</key>
+	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>SplashScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

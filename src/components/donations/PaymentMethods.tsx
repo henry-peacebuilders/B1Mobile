@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { ApiHelper, UserHelper } from "../../../src/helpers";
 import { ErrorHelper } from "../../helpers/ErrorHelper";
-import { Permissions, StripePaymentMethod } from "../../../src/interfaces";
+import { GatewayData, Permissions, StripePaymentMethod } from "../../../src/interfaces";
 import { useIsFocused } from "@react-navigation/native";
 import { Alert, View } from "react-native";
 import { ActivityIndicator, Button, Card, Divider, IconButton, List, Text, useTheme } from "react-native-paper";
@@ -17,12 +17,16 @@ interface Props {
   updatedFunction: () => void;
   isLoading: boolean;
   publishKey: string;
+  gatewayData?: GatewayData[];
 }
 
-export function PaymentMethods({ customerId, paymentMethods, updatedFunction, isLoading }: Props) {
+export function PaymentMethods({ customerId, paymentMethods, updatedFunction, isLoading, gatewayData }: Props) {
   const { t } = useTranslation();
   const { spacing } = useAppTheme();
   const theme = useTheme();
+  const isKingdomFunding = gatewayData?.[0]?.provider?.toLowerCase() === "kingdomfunding";
+  const kfTokenizationKey = isKingdomFunding ? gatewayData![0]?.publicKey : "";
+  const kfSandbox = isKingdomFunding ? (gatewayData![0]?.settings?.sandbox === true || gatewayData![0]?.environment === "sandbox") : false;
   const [showModal, setShowModal] = useState<boolean>(false);
   const [editPaymentMethod, setEditPaymentMethod] = useState<StripePaymentMethod>(new StripePaymentMethod());
   const [verify, setVerify] = useState<boolean>(false);
@@ -43,32 +47,46 @@ export function PaymentMethods({ customerId, paymentMethods, updatedFunction, is
   };
 
   const handleDelete = () => {
-    Alert.alert(t("donations.deleteMethodConfirmTitle"), t("donations.deleteMethodConfirmMessage"), [
-      {
-        text: t("common.cancel"),
-        onPress: () => {},
-        style: "cancel"
-      },
-      {
-        text: t("common.ok"),
-        onPress: async () => {
-          try {
-            await ApiHelper.delete("/paymentmethods/" + editPaymentMethod.id + "/" + customerId, "GivingApi");
-            setMode("display");
-            await updatedFunction();
-          } catch (err: any) {
-            Alert.alert(t("donations.deleteMethodError"));
-            ErrorHelper.logError("payment-method-delete", err);
+    console.log("[PM Delete] editPaymentMethod:", JSON.stringify(editPaymentMethod), "customerId:", customerId);
+    if (!editPaymentMethod.id) {
+      Alert.alert("Error", "No payment method selected for deletion.");
+      return;
+    }
+    Alert.alert(
+      "Delete Payment Method",
+      `Are you sure you want to delete ${editPaymentMethod.name || "this"} ending in ${editPaymentMethod.last4 || "****"}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const url = "/paymentmethods/" + editPaymentMethod.id + "/" + customerId;
+              console.log("[PM Delete] Calling:", url);
+              const result = await ApiHelper.delete(url, "GivingApi");
+              console.log("[PM Delete] Result:", JSON.stringify(result));
+              if (result?.error) {
+                Alert.alert("Delete Failed", result.error);
+              } else {
+                setMode("display");
+                await updatedFunction();
+              }
+            } catch (err: any) {
+              console.error("[PM Delete] Error:", err);
+              Alert.alert("Delete Failed", err?.message || JSON.stringify(err));
+              ErrorHelper.logError("payment-method-delete", err);
+            }
           }
         }
-      }
-    ]);
+      ]
+    );
   };
 
   let editModeContent: any = null;
   switch (editPaymentMethod.type) {
     case "card":
-      editModeContent = <CardForm setMode={setMode} card={editPaymentMethod} customerId={customerId} updatedFunction={updatedFunction} handleDelete={handleDelete} />;
+      editModeContent = <CardForm setMode={setMode} card={editPaymentMethod} customerId={customerId} updatedFunction={updatedFunction} handleDelete={handleDelete} isKingdomFunding={isKingdomFunding} kfTokenizationKey={kfTokenizationKey} kfSandbox={kfSandbox} />;
       break;
     case "bank":
       editModeContent = <EnhancedBankForm setMode={setMode} bank={editPaymentMethod} customerId={customerId} updatedFunction={updatedFunction} handleDelete={handleDelete} showVerifyForm={verify} />;

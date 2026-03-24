@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from "react-native";
 import { Card, Text, TextInput, Button, Switch, Menu, SegmentedButtons } from "react-native-paper";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useQuery } from "@tanstack/react-query";
 import { CardField, CardFieldInput, createPaymentMethod, collectBankAccountForSetup, confirmSetupIntent } from "@stripe/stripe-react-native";
+import { KingdomFundingTokenWebView, KFTokenWebViewHandle } from "./KingdomFundingTokenWebView";
 import { ApiHelper, CurrencyHelper } from "../../helpers";
 import { FundInterface, StripeDonationInterface, StripePaymentMethod } from "../../interfaces";
 import { useUser, useCurrentUserChurch } from "../../stores/useUserStore";
@@ -59,11 +60,20 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
   const [guestPaymentType, setGuestPaymentType] = useState<"card" | "bank">("card");
   const [bankConnecting, setBankConnecting] = useState(false);
 
+  // KF bank fields (for KingdomFunding ACH)
+  const [bankRoutingNumber, setBankRoutingNumber] = useState("");
+  const [bankAccountNumber, setBankAccountNumber] = useState("");
+  const [bankAccountType, setBankAccountType] = useState<"checking" | "savings">("checking");
+  const kfTokenRef = useRef<KFTokenWebViewHandle>(null);
+
   // Church data for non-auth users
   const [churchData, setChurchData] = useState<any>(null);
 
   // Determine church ID for funds query
   const churchId = currentUserChurch?.church?.id || "";
+  const isKingdomFunding = gatewayData?.[0]?.provider?.toLowerCase() === "kingdomfunding";
+  const kfTokenizationKey = isKingdomFunding ? gatewayData[0]?.publicKey : "";
+  const kfSandbox = isKingdomFunding ? (gatewayData[0]?.settings?.sandbox === true || gatewayData[0]?.environment === "sandbox") : false;
 
   // Use react-query for funds
   const { data: funds = [] } = useQuery<FundInterface[]>({
@@ -217,6 +227,19 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
       };
 
 
+      const gateway = gatewayData && gatewayData.length > 0 ? gatewayData[0] : null;
+      const churchObj = {
+        name: churchData?.name || currentUserChurch?.church?.name || CacheHelper.church?.name,
+        subDomain: churchData?.subDomain || currentUserChurch?.church?.subDomain || CacheHelper.church?.subDomain,
+        churchURL: `https://${churchData?.subDomain || currentUserChurch?.church?.subDomain || CacheHelper.church?.subDomain}.staging.b1.church`
+      };
+
+      // KingdomFunding flow — tokenize then charge
+      if (isKingdomFunding) {
+        await handleKFDonation(donation, gateway, churchObj);
+        return;
+      }
+
       if (!currentUserChurch?.person?.id) {
         // Guest user - route based on payment type
         if (guestPaymentType === "bank") {
@@ -226,17 +249,12 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
         }
       } else {
         // For authenticated users, add gatewayId and other required fields
-        const gateway = gatewayData && gatewayData.length > 0 ? gatewayData[0] : null;
         const enhancedDonation = {
           ...donation,
           gatewayId: gateway?.id,
           churchId: churchId || CacheHelper.church?.id,
           notes: "",
-          church: {
-            name: churchData?.name || currentUserChurch?.church?.name || CacheHelper.church?.name,
-            subDomain: churchData?.subDomain || currentUserChurch?.church?.subDomain || CacheHelper.church?.subDomain,
-            churchURL: `https://${churchData?.subDomain || currentUserChurch?.church?.subDomain || CacheHelper.church?.subDomain}.staging.b1.church`
-          }
+          church: churchObj
         };
         await makeDonation(enhancedDonation);
       }
@@ -264,6 +282,86 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
       case "one_year": return "year";
       default: return "month";
     }
+  };
+
+  const handleKFDonation = async (donation: StripeDonationInterface, gateway: any, churchObj: any) => {
+    let personResult: any = person;
+
+    // If guest, create user/person first
+    if (!currentUserChurch?.person?.id) {
+      console.log("[KF] Guest flow: calling loadOrCreate...");
+      await ApiHelper.post("/users/loadOrCreate", { userEmail: email, firstName, lastName }, "MembershipApi");
+      personResult = await ApiHelper.post("/people/loadOrCreate", {
+        churchId: churchId || CacheHelper.church?.id || "",
+        firstName, lastName, email
+      }, "MembershipApi");
+      console.log("[KF] personResult:", JSON.stringify(personResult));
+    }
+
+    // Check if user is using a saved payment method (dropdown selection)
+    const savedPm = pm.find(p => p.id === selectedMethod);
+    const isUsingSavedPm = !!(savedPm && pm.length > 0);
+    const isBank = !isUsingSavedPm && (guestPaymentType === "bank" || donation.type === "bank");
+
+    console.log("[KF] isUsingSavedPm:", isUsingSavedPm, "isBank:", isBank, "kfTokenRef:", !!kfTokenRef.current);
+
+    let kfPayload: any = {
+      amount: donation.amount,
+      provider: "kingdomfunding",
+      gatewayId: gateway?.id,
+      churchId: churchId || CacheHelper.church?.id,
+      person: {
+        id: personResult?.id || person?.id || "",
+        email: person ? user?.email || "" : email,
+        name: person ? `${user?.firstName} ${user?.lastName}` : `${firstName} ${lastName}`
+      },
+      customerId: customerId,
+      notes: "",
+      funds: donation.funds || [],
+      billing_cycle_anchor: donation.billing_cycle_anchor,
+      interval: donation.interval,
+      church: churchObj
+    };
+
+    if (isUsingSavedPm) {
+      // Saved payment method — send numeric Accept Blue PM ID directly
+      kfPayload.id = selectedMethod;
+      kfPayload.type = savedPm.type || "card";
+      kfPayload.cardBrand = savedPm.name || "";
+      kfPayload.cardLast4 = savedPm.last4 || "";
+    } else if (isBank) {
+      // Bank/ACH — send routing/account directly (not PCI-sensitive)
+      if (!bankRoutingNumber || !bankAccountNumber) {
+        Alert.alert(t("common.alert"), "Please enter your bank routing and account numbers.");
+        return;
+      }
+      kfPayload.type = "bank";
+      kfPayload.id = "bank-direct";
+      kfPayload.routing_number = bankRoutingNumber;
+      kfPayload.account_number = bankAccountNumber;
+      kfPayload.account_type = bankAccountType;
+      kfPayload.bankName = "Bank";
+      kfPayload.bankLast4 = bankAccountNumber.slice(-4);
+      kfPayload.bankAccountType = bankAccountType;
+    } else {
+      // New card — tokenize via KingdomFundingTokenWebView
+      if (!kfTokenRef.current) {
+        Alert.alert(t("common.alert"), "Payment form not ready. Please wait a moment and try again.");
+        return;
+      }
+      console.log("[KF] Calling getNonce()...");
+      const tokenResult = await kfTokenRef.current.getNonce();
+      console.log("[KF] getNonce result:", JSON.stringify(tokenResult));
+      kfPayload.type = "card";
+      kfPayload.id = tokenResult.nonce;
+      kfPayload.cardBrand = tokenResult.cardType;
+      kfPayload.cardLast4 = tokenResult.last4;
+      kfPayload.expiry_month = tokenResult.expiryMonth;
+      kfPayload.expiry_year = tokenResult.expiryYear;
+    }
+
+    console.log("[KF] calling makeDonation with payload:", JSON.stringify(kfPayload));
+    await makeDonation(kfPayload);
   };
 
   const handleGuestDonation = async (donation: StripeDonationInterface) => {
@@ -428,7 +526,7 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
     const endpoint = isRecurring ? "/donate/subscribe/" : "/donate/charge/";
     const result = await ApiHelper.post(endpoint, donation, "GivingApi");
 
-    if (result?.status === "succeeded" || result?.status === "pending" || result?.status === "active") {
+    if (result?.status === "succeeded" || result?.status === "pending" || result?.status === "active" || result?.status === "Approved") {
       // Store completion data
       setCompletionData({
         amount: CurrencyHelper.formatCurrency(calculateTotal()),
@@ -488,25 +586,28 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
               <TextInput mode="outlined" label={t("auth.lastName")} value={lastName} onChangeText={setLastName} style={[styles.guestInput, styles.nameInput]} />
             </View>
 
-            {/* Payment Type Selector for Guests */}
-            <Text variant="titleSmall" style={styles.paymentTypeLabel}>
-              {t("donations.selectPaymentMethod")}
-            </Text>
-            <SegmentedButtons
-              value={guestPaymentType}
-              onValueChange={(value) => {
-                setGuestPaymentType(value as "card" | "bank");
-                // Reset recurring when switching to bank (one-time only for guest ACH)
-                if (value === "bank") {
-                  setIsRecurring(false);
-                }
-              }}
-              buttons={[
-                { value: "card", label: "Credit/Debit Card" },
-                { value: "bank", label: "Bank Account (ACH)" }
-              ]}
-              style={styles.paymentTypeButtons}
-            />
+            {/* Payment Type Selector for Guests (Stripe only — KF shows toggle in payment section) */}
+            {!isKingdomFunding && (
+              <>
+                <Text variant="titleSmall" style={styles.paymentTypeLabel}>
+                  {t("donations.selectPaymentMethod")}
+                </Text>
+                <SegmentedButtons
+                  value={guestPaymentType}
+                  onValueChange={(value) => {
+                    setGuestPaymentType(value as "card" | "bank");
+                    if (value === "bank") {
+                      setIsRecurring(false);
+                    }
+                  }}
+                  buttons={[
+                    { value: "card", label: "Credit/Debit Card" },
+                    { value: "bank", label: "Bank Account (ACH)" }
+                  ]}
+                  style={styles.paymentTypeButtons}
+                />
+              </>
+            )}
           </Card.Content>
         </Card>
       )}
@@ -542,8 +643,8 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
         </Card.Content>
       </Card>
 
-      {/* Recurring Toggle - Hidden for guest bank payments (one-time only) */}
-      {!((!currentUserChurch?.person?.id) && guestPaymentType === "bank") && (
+      {/* Recurring Toggle - Hidden for Stripe guest bank payments (KF supports bank recurring) */}
+      {!(!isKingdomFunding && !currentUserChurch?.person?.id && guestPaymentType === "bank") && (
         <Card style={styles.sectionCard}>
           <Card.Content>
             <View style={styles.switchRow}>
@@ -619,7 +720,87 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
             {t("donations.selectPaymentMethod")}
           </Text>
 
-          {pm.length > 0 ? (
+          {isKingdomFunding ? (
+            // KingdomFunding payment input
+            <>
+              {/* Payment type toggle for KF (guest and auth) */}
+              {!pm.length && (
+                <>
+                  <SegmentedButtons
+                    value={guestPaymentType}
+                    onValueChange={(value) => setGuestPaymentType(value as "card" | "bank")}
+                    buttons={[
+                      { value: "card", label: "Credit/Debit Card" },
+                      { value: "bank", label: "Bank Account (ACH)" }
+                    ]}
+                    style={styles.paymentTypeButtons}
+                  />
+                </>
+              )}
+
+              {pm.length > 0 ? (
+                <Menu
+                  visible={showMethodMenu}
+                  onDismiss={() => setShowMethodMenu(false)}
+                  anchor={
+                    <TouchableOpacity style={styles.selector} onPress={() => setShowMethodMenu(true)}>
+                      <Text variant="bodyLarge" style={styles.selectorText}>
+                        {getMethodLabel(pm.find(m => m.id === selectedMethod)!)}
+                      </Text>
+                      <MaterialIcons name="expand-more" size={24} color="#9E9E9E" />
+                    </TouchableOpacity>
+                  }>
+                  {pm.map(method => (
+                    <Menu.Item
+                      key={method.id}
+                      onPress={() => {
+                        setSelectedMethod(method.id);
+                        setShowMethodMenu(false);
+                      }}
+                      title={getMethodLabel(method)}
+                    />
+                  ))}
+                </Menu>
+              ) : guestPaymentType === "bank" ? (
+                // KF Bank/ACH direct input
+                <View style={styles.kfBankContainer}>
+                  <TextInput
+                    mode="outlined"
+                    label="Routing Number"
+                    value={bankRoutingNumber}
+                    onChangeText={setBankRoutingNumber}
+                    keyboardType="numeric"
+                    maxLength={9}
+                    style={styles.kfBankInput}
+                  />
+                  <TextInput
+                    mode="outlined"
+                    label="Account Number"
+                    value={bankAccountNumber}
+                    onChangeText={setBankAccountNumber}
+                    keyboardType="numeric"
+                    style={styles.kfBankInput}
+                  />
+                  <SegmentedButtons
+                    value={bankAccountType}
+                    onValueChange={(value) => setBankAccountType(value as "checking" | "savings")}
+                    buttons={[
+                      { value: "checking", label: "Checking" },
+                      { value: "savings", label: "Savings" }
+                    ]}
+                    style={styles.kfBankAccountTypeButtons}
+                  />
+                </View>
+              ) : (
+                // KF Card via hosted tokenization WebView
+                <KingdomFundingTokenWebView
+                  ref={kfTokenRef}
+                  tokenizationKey={kfTokenizationKey}
+                  sandbox={kfSandbox}
+                />
+              )}
+            </>
+          ) : pm.length > 0 ? (
             <Menu
               visible={showMethodMenu}
               onDismiss={() => setShowMethodMenu(false)}
@@ -907,5 +1088,16 @@ const styles = StyleSheet.create({
     marginTop: 16,
     gap: 8
   },
-  bankConnectingText: { color: "#0D47A1" }
+  bankConnectingText: { color: "#0D47A1" },
+
+  // KF Bank Fields
+  kfBankContainer: {
+    gap: 12
+  },
+  kfBankInput: {
+    backgroundColor: "#FFFFFF"
+  },
+  kfBankAccountTypeButtons: {
+    marginTop: 4
+  }
 });

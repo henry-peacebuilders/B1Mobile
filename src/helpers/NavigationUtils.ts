@@ -1,4 +1,4 @@
-import { Alert, Linking, Platform } from "react-native";
+import { Alert } from "react-native";
 import { router } from "expo-router";
 import { EnvironmentHelper } from "./EnvironmentHelper";
 import { UserHelper } from "./UserHelper";
@@ -117,16 +117,6 @@ export class NavigationUtils {
 
   private static handleDonationNavigation(isFromHome: boolean, currentChurch?: any) {
     UserHelper.addOpenScreenEvent("DonationScreen");
-    const uc = useUserStore.getState().currentUserChurch;
-
-    if (Platform.OS === "ios") {
-      let url = "https://" + currentChurch?.subDomain + ".b1.church/login/?returnUrl=%2Fdonate";
-      if (uc?.jwt) {
-        url += "&jwt=" + uc.jwt;
-      }
-      Linking.openURL(url);
-    } else {
-      router.push(isFromHome ? "donationRoot" : "/(drawer)/donation");
-    }
+    router.push(isFromHome ? "donationRoot" : "/(drawer)/donation");
   }
 }

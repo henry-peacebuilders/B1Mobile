@@ -3,7 +3,7 @@ import { StyleSheet } from "react-native";
 import { Text, Card } from "react-native-paper";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { PaymentMethods } from "../LazyDonationComponents";
-import { StripePaymentMethod } from "../../../interfaces";
+import { GatewayData, StripePaymentMethod } from "../../../interfaces";
 import { UserInterface } from "../../../interfaces";
 import { useTranslation } from "react-i18next";
 
@@ -14,6 +14,7 @@ interface ManagePaymentsProps {
   isLoading: boolean;
   publishKey: string;
   loadData: () => Promise<void>;
+  gatewayData?: GatewayData[];
 }
 
 export const ManagePayments: React.FC<ManagePaymentsProps> = ({
@@ -22,7 +23,8 @@ export const ManagePayments: React.FC<ManagePaymentsProps> = ({
   paymentMethods,
   isLoading,
   publishKey,
-  loadData
+  loadData,
+  gatewayData
 }) => {
   const { t } = useTranslation();
 
@@ -49,6 +51,7 @@ export const ManagePayments: React.FC<ManagePaymentsProps> = ({
       updatedFunction={loadData}
       isLoading={isLoading}
       publishKey={publishKey}
+      gatewayData={gatewayData}
     />
   );
 };

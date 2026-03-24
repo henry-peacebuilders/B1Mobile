@@ -110,9 +110,13 @@ const Donation = () => {
   }, []);
 
   useEffect(() => {
-    if (gatewayData && gatewayData.length && gatewayData[0]?.publicKey) {
-      initStripe({ publishableKey: gatewayData[0].publicKey });
-      setPublishKey(gatewayData[0].publicKey);
+    if (gatewayData && gatewayData.length) {
+      const gateway = gatewayData[0];
+      const isKF = gateway?.provider?.toLowerCase() === "kingdomfunding";
+      if (!isKF && gateway?.publicKey) {
+        initStripe({ publishableKey: gateway.publicKey });
+      }
+      setPublishKey(gateway?.publicKey || "");
     }
   }, [gatewayData]);
 
@@ -181,9 +185,9 @@ const Donation = () => {
 
   const renderDonateSection = () => <EnhancedDonationForm paymentMethods={paymentMethods} customerId={customerId} gatewayData={gatewayData} updatedFunction={loadData} initialDonation={selectedRepeatDonation} />;
 
-  const renderManageSection = () => <ManagePayments person={person} customerId={customerId} paymentMethods={paymentMethods} isLoading={areMethodsLoading} publishKey={publishKey} loadData={loadData} />;
+  const renderManageSection = () => <ManagePayments person={person} customerId={customerId} paymentMethods={paymentMethods} isLoading={areMethodsLoading} publishKey={publishKey} loadData={loadData} gatewayData={gatewayData} />;
 
-  const renderHistorySection = () => <EnhancedGivingHistory customerId={customerId} paymentMethods={paymentMethods || []} donationImpactData={donationImpactData || []} donationImpactLoading={donationImpactLoading} />;
+  const renderHistorySection = () => <EnhancedGivingHistory customerId={customerId} paymentMethods={paymentMethods || []} donationImpactData={donationImpactData || []} donationImpactLoading={donationImpactLoading} gatewayData={gatewayData} />;
 
   return (
     <PaperProvider theme={theme}>
