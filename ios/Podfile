@@ -60,5 +60,34 @@ target 'B1Mobile' do
         end
       end
     end
+
+    # Fix Stripe STPPaymentStatus enum type mismatch with Xcode 26+
+    # NSUInteger vs NSInteger in StripeSwiftInterop.h forward declaration
+    stripe_interop = File.join(installer.sandbox.root, '..', '..', 'node_modules', '@stripe', 'stripe-react-native', 'ios', 'StripeSwiftInterop.h')
+    if File.exist?(stripe_interop)
+      content = File.read(stripe_interop)
+      if content.include?('NS_ENUM(NSUInteger, STPPaymentStatus)')
+        content.gsub!('NS_ENUM(NSUInteger, STPPaymentStatus)', 'NS_ENUM(NSInteger, STPPaymentStatus)')
+        File.write(stripe_interop, content)
+      end
+    end
+
+    # Fix fmt consteval build error with Xcode 26+ / newer clang
+    # Patch fmt/base.h to disable consteval for all Apple clang versions
+    fmt_base = File.join(installer.sandbox.root, 'fmt/include/fmt/base.h')
+    if File.exist?(fmt_base)
+      content = File.read(fmt_base)
+      unless content.include?('consteval is broken in Apple clang / Xcode 26+')
+        content.gsub!(
+          '#elif defined(__apple_build_version__) && __apple_build_version__ < 14000029L' + "\n" +
+          '#  define FMT_USE_CONSTEVAL 0  // consteval is broken in Apple clang < 14.',
+          '#elif defined(__apple_build_version__) && __apple_build_version__ < 14000029L' + "\n" +
+          '#  define FMT_USE_CONSTEVAL 0  // consteval is broken in Apple clang < 14.' + "\n" +
+          '#elif defined(__apple_build_version__)' + "\n" +
+          '#  define FMT_USE_CONSTEVAL 0  // consteval is broken in Apple clang / Xcode 26+.'
+        )
+        File.write(fmt_base, content)
+      end
+    end
   end
 end
