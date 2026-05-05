@@ -289,21 +289,17 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
 
     // If guest, create user/person first
     if (!currentUserChurch?.person?.id) {
-      console.log("[KF] Guest flow: calling loadOrCreate...");
       await ApiHelper.post("/users/loadOrCreate", { userEmail: email, firstName, lastName }, "MembershipApi");
       personResult = await ApiHelper.post("/people/loadOrCreate", {
         churchId: churchId || CacheHelper.church?.id || "",
         firstName, lastName, email
       }, "MembershipApi");
-      console.log("[KF] personResult:", JSON.stringify(personResult));
     }
 
     // Check if user is using a saved payment method (dropdown selection)
     const savedPm = pm.find(p => p.id === selectedMethod);
     const isUsingSavedPm = !!(savedPm && pm.length > 0);
     const isBank = !isUsingSavedPm && (guestPaymentType === "bank" || donation.type === "bank");
-
-    console.log("[KF] isUsingSavedPm:", isUsingSavedPm, "isBank:", isBank, "kfTokenRef:", !!kfTokenRef.current);
 
     let kfPayload: any = {
       amount: donation.amount,
@@ -349,9 +345,7 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
         Alert.alert(t("common.alert"), "Payment form not ready. Please wait a moment and try again.");
         return;
       }
-      console.log("[KF] Calling getNonce()...");
       const tokenResult = await kfTokenRef.current.getNonce();
-      console.log("[KF] getNonce result:", JSON.stringify(tokenResult));
       kfPayload.type = "card";
       kfPayload.id = tokenResult.nonce;
       kfPayload.cardBrand = tokenResult.cardType;
@@ -360,7 +354,6 @@ export function EnhancedDonationForm({ paymentMethods: pm, customerId, gatewayDa
       kfPayload.expiry_year = tokenResult.expiryYear;
     }
 
-    console.log("[KF] calling makeDonation with payload:", JSON.stringify(kfPayload));
     await makeDonation(kfPayload);
   };
 
